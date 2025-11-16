@@ -2,49 +2,44 @@ import { supabase } from '../../infrastructure/supabaseClient';
 import { fetchMovieFromTvdb, fetchSeriesFromTvdb } from '../../infrastructure/external/tvdbService';
 
 interface MovieRecord {
-    id: string;
-    tvdb_id: string;
-    imdb_id: string | null;
-    name: string;
-    extended_title: string | null;
-    year: string | null;
-    overview: string | null;
-    country: string | null;
-    director: string | null;
-    poster_url: string | null;
-    thumbnail_url: string | null;
-    genre: string[] | null;
-    first_air_time: string | null;
-    language: string | null;
-    status: string | null;
-    fetched_at: string;
+  id: string;
+  tvdb_id: string;
+  imdb_id: string | null;
+  name: string;
+  extended_title: string | null;
+  year: string | null;
+  overview: string | null;
+  country: string | null;
+  director: string | null;
+  poster_url: string | null;
+  thumbnail_url: string | null;
+  genre: string[] | null;
+  first_air_time: string | null;
+  language: string | null;
+  status: string | null;
+  fetched_at: string;
 }
 
 export async function getOrCreateMovies(
   title: string,
   tvdbApiKey: string
 ): Promise<MovieRecord[] | null> {
-  // Search locally using fuzzy RPC function
+  // Step 1: Search locally using fuzzy RPC
   const { data: localMovies, error: localError } = await supabase
     .rpc('search_movies_fuzzy', { search_term: title.trim() });
 
   if (localError) throw localError;
 
-  // If local movies found are 5 or more, return them directly
-  if (localMovies && localMovies.length >= 5) {
-    return localMovies;
-  }
-
-  // Fetch movies from TVDB (multiple results)
+  // Step 2: Always fetch from TVDB for comprehensive results
   const tvdbMovies = await fetchMovieFromTvdb(title, tvdbApiKey);
+  
   if (!tvdbMovies || tvdbMovies.length === 0) {
-    return localMovies ?? null;
+    // No TVDB results, return local only
+    return localMovies && localMovies.length > 0 ? localMovies : null;
   }
 
-  // Extract all TVDB IDs from fetched TVDB movies
+  // Step 3: Check which TVDB movies already exist in our DB
   const tvdbIdsToCheck = tvdbMovies.map(m => m.id);
-
-  // Query Supabase to find which TVDB IDs already exist
   const { data: existingMoviesByTvdbId, error: existingError } = await supabase
     .from('movies')
     .select('tvdb_id')
@@ -54,13 +49,12 @@ export async function getOrCreateMovies(
 
   const existingTvdbIds = new Set(existingMoviesByTvdbId?.map(m => m.tvdb_id) ?? []);
 
-  // Filter TVDB movies to only those not already in DB
+  // Step 4: Insert only new movies from TVDB
   const moviesToInsert = tvdbMovies
     .filter(m => !existingTvdbIds.has(m.id))
     .map(m => ({
       tvdb_id: m.id,
-      imdb_id:
-        m.remote_ids?.find((id: any) => id.sourceName === 'IMDB')?.id ?? null,
+      imdb_id: m.remote_ids?.find((id: any) => id.sourceName === 'IMDB')?.id ?? null,
       name: m.name,
       extended_title: m.extended_title ?? null,
       year: m.year ?? null,
@@ -84,12 +78,21 @@ export async function getOrCreateMovies(
       .select('*');
 
     if (insertError) throw insertError;
-
     insertedMovies = inserted ?? [];
   }
 
-  return [...(localMovies ?? []), ...insertedMovies];
+  // Step 5: Merge and deduplicate results
+  const allMovies = [...(localMovies ?? []), ...insertedMovies];
+  
+  // Deduplicate by tvdb_id (keep first occurrence)
+  const uniqueMovies = Array.from(
+    new Map(allMovies.map(m => [m.tvdb_id, m])).values()
+  );
+
+  // Return ALL results (removed slice limit)
+  return uniqueMovies.length > 0 ? uniqueMovies : null;
 }
+
 
 
 
@@ -110,6 +113,7 @@ interface SeriesRecord {
   language: string | null;
   status: string | null;
   network: string | null;
+  aliases: string[] | null;
   fetched_at: string;
 }
 
@@ -117,24 +121,20 @@ export async function getOrCreateSeries(
   title: string,
   tvdbApiKey: string
 ): Promise<SeriesRecord[] | null> {
-  // Search locally using fuzzy RPC function
+  // Step 1: Search locally using fuzzy RPC
   const { data: localSeries, error: localError } = await supabase
     .rpc('search_series_fuzzy', { search_term: title.trim() });
 
   if (localError) throw localError;
 
-  // Return local if found at least 5 records
-  if (localSeries && localSeries.length >= 5) {
-    return localSeries;
-  }
-
-  // Fetch series from TVDB
+  // Step 2: Always fetch from TVDB
   const tvdbSeries = await fetchSeriesFromTvdb(title, tvdbApiKey);
+  
   if (!tvdbSeries || tvdbSeries.length === 0) {
-    return localSeries ?? null;
+    return localSeries && localSeries.length > 0 ? localSeries : null;
   }
 
-  // Get existing tvdb_ids from local DB
+  // Step 3: Check existing tvdb_ids
   const tvdbIdsToCheck = tvdbSeries.map(s => s.id);
   const { data: existing, error: errExisting } = await supabase
     .from('series')
@@ -145,13 +145,12 @@ export async function getOrCreateSeries(
 
   const existingIds = new Set(existing?.map(s => s.tvdb_id) ?? []);
 
-  // Filter new series not in DB
+  // Step 4: Insert new series
   const newSeriesToInsert = tvdbSeries
     .filter(s => !existingIds.has(s.id))
     .map(s => ({
       tvdb_id: s.id,
-      imdb_id:
-        s.remote_ids?.find((id: any) => id.sourceName === 'IMDB')?.id ?? null,
+      imdb_id: s.remote_ids?.find((id: any) => id.sourceName === 'IMDB')?.id ?? null,
       name: s.name,
       extended_title: s.extended_title ?? null,
       year: s.year ?? null,
@@ -165,6 +164,7 @@ export async function getOrCreateSeries(
       language: s.primary_language ?? null,
       status: s.status ?? null,
       network: s.network ?? null,
+      aliases: s.aliases ?? [],
       fetched_at: new Date().toISOString(),
     }));
 
@@ -179,5 +179,13 @@ export async function getOrCreateSeries(
     inserted = data ?? [];
   }
 
-  return [...(localSeries ?? []), ...inserted];
+  // Step 5: Merge and deduplicate
+  const allSeries = [...(localSeries ?? []), ...inserted];
+  
+  const uniqueSeries = Array.from(
+    new Map(allSeries.map(s => [s.tvdb_id, s])).values()
+  );
+
+  // Return ALL results (removed slice limit)
+  return uniqueSeries.length > 0 ? uniqueSeries : null;
 }

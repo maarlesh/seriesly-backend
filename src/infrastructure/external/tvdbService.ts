@@ -77,7 +77,7 @@ export async function fetchMovieFromTvdb(title: string, tvdbApiKey: string) {
     const onlyMovies = searchData.data.filter(item => item.primary_type === 'movie');
 
     // Return up to 10 movies
-    return onlyMovies.slice(0, 10);
+    return onlyMovies;
 }
 
 
@@ -109,5 +109,5 @@ export async function fetchSeriesFromTvdb(title: string, tvdbApiKey: string) {
   const onlySeries = searchData.data.filter(item => item.primary_type === 'series');
 
   // Return up to 10 series
-  return onlySeries.slice(0, 10);
+  return onlySeries;
 }
