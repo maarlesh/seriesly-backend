@@ -24,20 +24,18 @@ export async function getOrCreateMovies(
   title: string,
   tvdbApiKey: string
 ): Promise<MovieRecord[] | null> {
-  // Search locally by partial name match
+  // Search locally using fuzzy RPC function
   const { data: localMovies, error: localError } = await supabase
-    .from('movies')
-    .select('*')
-    .ilike('name', `%${title.trim()}%`);
+    .rpc('search_movies_fuzzy', { search_term: title.trim() });
 
   if (localError) throw localError;
 
+  // If local movies found are 5 or more, return them directly
   if (localMovies && localMovies.length >= 5) {
-    // If enough local movies found, return directly
     return localMovies;
   }
 
-  // Fetch multiple movies from TVDB for the title
+  // Fetch movies from TVDB (multiple results)
   const tvdbMovies = await fetchMovieFromTvdb(title, tvdbApiKey);
   if (!tvdbMovies || tvdbMovies.length === 0) {
     return localMovies ?? null;
@@ -80,7 +78,6 @@ export async function getOrCreateMovies(
 
   let insertedMovies: MovieRecord[] = [];
   if (moviesToInsert.length > 0) {
-    // Insert only new movies
     const { data: inserted, error: insertError } = await supabase
       .from('movies')
       .insert(moviesToInsert)
@@ -91,7 +88,6 @@ export async function getOrCreateMovies(
     insertedMovies = inserted ?? [];
   }
 
-  // Return combined array of local (partial name matches) and newly inserted movies
   return [...(localMovies ?? []), ...insertedMovies];
 }
 
@@ -117,17 +113,13 @@ interface SeriesRecord {
   fetched_at: string;
 }
 
-
-
 export async function getOrCreateSeries(
   title: string,
   tvdbApiKey: string
 ): Promise<SeriesRecord[] | null> {
-  // Search locally by partial name
+  // Search locally using fuzzy RPC function
   const { data: localSeries, error: localError } = await supabase
-    .from('series')
-    .select('*')
-    .ilike('name', `%${title.trim()}%`);
+    .rpc('search_series_fuzzy', { search_term: title.trim() });
 
   if (localError) throw localError;
 
